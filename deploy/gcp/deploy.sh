@@ -17,6 +17,10 @@ REPO="arnaai"
 TAG="$(date +%Y%m%d-%H%M%S)"
 AR="${REGION}-docker.pkg.dev/${PROJECT}/${REPO}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+# Cost: scale to zero when idle (first request after idle is a slow cold start)
+# and cap instances. Raise MIN_INSTANCES / MAX_INSTANCES for real traffic.
+MIN_INSTANCES="${MIN_INSTANCES:-0}"
+MAX_INSTANCES="${MAX_INSTANCES:-2}"
 
 gcloud config set project "$PROJECT" >/dev/null
 echo "› Enabling APIs"
@@ -44,7 +48,8 @@ echo "› Secrets (created once; rotate with 'gcloud secrets versions add')"
 make_secret() { # name value
   gcloud secrets describe "$1" >/dev/null 2>&1 || printf '%s' "$2" | gcloud secrets create "$1" --data-file=- --replication-policy automatic
 }
-make_secret arnaai-data-key "$(python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')"
+# Fernet key = url-safe base64 of 32 random bytes (openssl avoids needing Python here).
+make_secret arnaai-data-key "$(openssl rand 32 | base64 | tr '+/' '-_')"
 make_secret arnaai-counselor-token "$(openssl rand -hex 24)"
 make_secret arnaai-service-key "$(openssl rand -hex 24)"
 if [[ -n "${GOOGLE_API_KEY:-}" ]]; then make_secret arnaai-google-api-key "$GOOGLE_API_KEY"; fi
@@ -58,7 +63,7 @@ gcloud builds submit "$ROOT/frontend" --tag "$AR/web:$TAG" --quiet
 echo "› Deploying emotion service (private)"
 gcloud run deploy arnaai-emotion --image "$AR/emotion:$TAG" --region "$REGION" \
   --service-account "arnaai-emotion@${PROJECT}.iam.gserviceaccount.com" \
-  --no-allow-unauthenticated --cpu 1 --memory 512Mi --min-instances 0 --max-instances 5 \
+  --no-allow-unauthenticated --cpu 1 --memory 512Mi --min-instances "$MIN_INSTANCES" --max-instances "$MAX_INSTANCES" \
   --set-secrets SERVICE_KEY=arnaai-service-key:latest --quiet
 EMOTION_URL="$(gcloud run services describe arnaai-emotion --region "$REGION" --format 'value(status.url)')"
 gcloud run services add-iam-policy-binding arnaai-emotion --region "$REGION" \
@@ -72,15 +77,15 @@ if gcloud secrets describe arnaai-google-api-key >/dev/null 2>&1; then
 fi
 gcloud run deploy arnaai-therapy --image "$AR/therapy:$TAG" --region "$REGION" \
   --service-account "$THERAPY_SA" --allow-unauthenticated --cpu 1 --memory 1Gi \
-  --min-instances 1 --max-instances 10 --concurrency 40 \
-  --set-env-vars "STORAGE_BACKEND=firestore,EMOTION_SERVICE_URL=${EMOTION_URL},GEMINI_MODEL=${GEMINI_MODEL:-gemini-3.8-flash},${LLM_ENV}" \
+  --min-instances "$MIN_INSTANCES" --max-instances "$MAX_INSTANCES" --concurrency 40 \
+  --set-env-vars "STORAGE_BACKEND=firestore,EMOTION_SERVICE_URL=${EMOTION_URL},GEMINI_MODEL=${GEMINI_MODEL:-gemini-3.8-flash},EXTRACTION_MODEL=${EXTRACTION_MODEL:-gemini-3.5-flash-lite},${LLM_ENV}" \
   --set-secrets "$SECRETS" --quiet
 THERAPY_URL="$(gcloud run services describe arnaai-therapy --region "$REGION" --format 'value(status.url)')"
 
 echo "› Deploying web frontend"
 gcloud run deploy arnaai-web --image "$AR/web:$TAG" --region "$REGION" \
   --service-account "arnaai-web@${PROJECT}.iam.gserviceaccount.com" \
-  --allow-unauthenticated --cpu 1 --memory 512Mi --min-instances 0 --max-instances 10 \
+  --allow-unauthenticated --cpu 1 --memory 512Mi --min-instances "$MIN_INSTANCES" --max-instances "$MAX_INSTANCES" \
   --set-env-vars "THERAPY_API_URL=${THERAPY_URL}" --quiet
 WEB_URL="$(gcloud run services describe arnaai-web --region "$REGION" --format 'value(status.url)')"
 
