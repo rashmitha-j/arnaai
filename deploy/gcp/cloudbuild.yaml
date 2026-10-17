@@ -1,0 +1,56 @@
+# CI/CD: runs tests, builds the three images and rolls out to Cloud Run.
+# Trigger from a GitHub push with:
+#   gcloud builds triggers create github --repo-name=arnaai --repo-owner=YOU \
+#     --branch-pattern='^main$' --build-config=deploy/gcp/cloudbuild.yaml
+# First-time infrastructure (secrets, Firestore, service accounts) is created by deploy.sh.
+substitutions:
+  _REGION: asia-south1
+  _AR: ${_REGION}-docker.pkg.dev/${PROJECT_ID}/arnaai
+
+steps:
+  - id: test-emotion
+    name: python:3.12-slim
+    dir: services/emotion
+    entrypoint: bash
+    args: ["-c", "pip install -q -r requirements.txt && python -m pytest -q"]
+
+  - id: test-therapy
+    name: python:3.12-slim
+    entrypoint: bash
+    args: ["-c", "pip install -q -r services/emotion/requirements.txt -r services/therapy/requirements.txt && cd services/therapy && python -m pytest -q"]
+
+  - id: build-emotion
+    name: gcr.io/cloud-builders/docker
+    args: ["build", "-t", "${_AR}/emotion:${SHORT_SHA}", "services/emotion"]
+    waitFor: [test-emotion, test-therapy]
+  - id: build-therapy
+    name: gcr.io/cloud-builders/docker
+    args: ["build", "-t", "${_AR}/therapy:${SHORT_SHA}", "services/therapy"]
+    waitFor: [test-emotion, test-therapy]
+  - id: build-web
+    name: gcr.io/cloud-builders/docker
+    args: ["build", "-t", "${_AR}/web:${SHORT_SHA}", "frontend"]
+    waitFor: [test-emotion, test-therapy]
+
+  - id: push
+    name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    args: ["-c", "for s in emotion therapy web; do docker push ${_AR}/$$s:${SHORT_SHA}; done"]
+
+  - id: deploy
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        gcloud run deploy arnaai-emotion --image ${_AR}/emotion:${SHORT_SHA} --region ${_REGION} --quiet
+        gcloud run deploy arnaai-therapy --image ${_AR}/therapy:${SHORT_SHA} --region ${_REGION} --quiet
+        gcloud run deploy arnaai-web --image ${_AR}/web:${SHORT_SHA} --region ${_REGION} --quiet
+
+images:
+  - ${_AR}/emotion:${SHORT_SHA}
+  - ${_AR}/therapy:${SHORT_SHA}
+  - ${_AR}/web:${SHORT_SHA}
+options:
+  logging: CLOUD_LOGGING_ONLY
+  dynamic_substitutions: true

@@ -1,0 +1,30 @@
+# Local stack: docker compose up --build   ->  http://localhost:3000
+services:
+  emotion:
+    build: ./services/emotion
+    environment:
+      SERVICE_KEY: ${SERVICE_KEY:-local-service-key}
+    ports: ["8081:8080"]
+
+  therapy:
+    build: ./services/therapy
+    env_file: .env
+    environment:
+      EMOTION_SERVICE_URL: http://emotion:8080
+      SERVICE_KEY: ${SERVICE_KEY:-local-service-key}
+      STORAGE_BACKEND: sqlite
+      SQLITE_PATH: /data/arnaai.db
+      ALLOWED_ORIGINS: http://localhost:3000
+    volumes: ["therapy-data:/data"]
+    depends_on: [emotion]
+    ports: ["8080:8080"]
+
+  frontend:
+    build: ./frontend
+    environment:
+      THERAPY_API_URL: http://therapy:8080
+    depends_on: [therapy]
+    ports: ["3000:8080"]
+
+volumes:
+  therapy-data:

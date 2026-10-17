@@ -1,0 +1,24 @@
+# Secrets: only the template is committed
+.env
+.env.*
+!.env.example
+
+# Local data (SQLite database + its journal/WAL files)
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Python
+__pycache__/
+.pytest_cache/
+.venv/
+
+# Node / Next.js
+node_modules/
+.next/
+next-env.d.ts
+*.tsbuildinfo
+npm-debug.log*
+
+.DS_Store
