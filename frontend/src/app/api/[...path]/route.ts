@@ -3,6 +3,8 @@
 import { NextRequest } from "next/server";
 
 export const dynamic = "force-dynamic";
+// A sleeping free-tier backend (e.g. Render) can take about a minute to wake up.
+export const maxDuration = 120;
 
 const API = (process.env.THERAPY_API_URL || "http://127.0.0.1:8080").replace(/\/$/, "");
 const FORWARD = ["authorization", "content-type", "x-counselor-name"];

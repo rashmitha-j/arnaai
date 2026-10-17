@@ -1,0 +1,66 @@
+# Render Blueprint: the two Flask services on Render's free plan.
+# The Next.js frontend is deployed separately on Vercel (Root Directory: frontend).
+#
+# Secrets are never stored here: `sync: false` values are typed into the Render
+# dashboard when the Blueprint is created, and `generateValue` ones are created by Render.
+#
+# Free-plan caveats: services sleep after 15 min idle (~1 min to wake) and the
+# filesystem is ephemeral, so the SQLite data (sessions, escalations) is reset
+# whenever a service sleeps, restarts or redeploys. Fine for demos.
+services:
+  - type: web
+    name: arnaai-emotion
+    runtime: python
+    plan: free
+    region: singapore
+    rootDir: services/emotion
+    buildCommand: pip install -r requirements.txt
+    # One worker fits the 512 MB free instance; long timeout covers slow boots on 0.1 CPU.
+    startCommand: gunicorn --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 60 app:app
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.13.5
+      - key: SERVICE_KEY            # shared secret; the therapy service reads the same value
+        generateValue: true
+
+  - type: web
+    name: arnaai-therapy
+    runtime: python
+    plan: free
+    region: singapore
+    rootDir: services/therapy
+    buildCommand: pip install -r requirements.txt
+    # Single worker: SQLite, the in-memory rate limiter and 512 MB RAM all want one process.
+    startCommand: gunicorn --bind 0.0.0.0:$PORT --workers 1 --threads 8 --timeout 120 "app:create_app()"
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.13.5
+      - key: LLM_PROVIDER
+        value: gemini
+      - key: GEMINI_MODEL
+        value: gemini-3.8-flash
+      - key: EXTRACTION_MODEL
+        value: gemini-3.5-flash-lite
+      - key: STORAGE_BACKEND
+        value: sqlite
+      - key: SQLITE_PATH
+        value: /tmp/arnaai.db
+      - key: SERVICE_KEY
+        fromService:
+          type: web
+          name: arnaai-emotion
+          envVarKey: SERVICE_KEY
+      - key: COUNSELOR_TOKEN        # counselor dashboard access code (read it in the dashboard)
+        generateValue: true
+      - key: GOOGLE_API_KEY         # your Gemini key, entered in the dashboard
+        sync: false
+      - key: DATA_ENCRYPTION_KEY    # Fernet key, entered in the dashboard
+        sync: false
+      - key: EMOTION_SERVICE_URL    # public URL of arnaai-emotion, e.g. https://arnaai-emotion.onrender.com
+        sync: false
+      - key: ALLOWED_ORIGINS        # your Vercel URL, e.g. https://arnaai.vercel.app
+        sync: false
+      - key: PUBLIC_APP_URL         # same Vercel URL (used in counselor alert links)
+        sync: false

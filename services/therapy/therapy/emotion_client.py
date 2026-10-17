@@ -6,6 +6,7 @@ the same analyzer in-process when available, else return a neutral profile.
 from __future__ import annotations
 
 import logging
+import os
 
 import requests
 
@@ -20,7 +21,11 @@ class EmotionClient:
         self.base_url = base_url.rstrip("/")
         self.headers = {"X-Service-Key": service_key} if service_key else {}
         self.timeout = timeout
-        self._id_token_audience = base_url if base_url.startswith("https://") else None
+        # Google ID tokens only exist on Cloud Run (K_SERVICE is set there). Elsewhere
+        # (e.g. Render) the shared X-Service-Key alone authenticates the call, and
+        # skipping the token lookup avoids a slow metadata-server probe per turn.
+        on_cloud_run = bool(os.getenv("K_SERVICE"))
+        self._id_token_audience = base_url if on_cloud_run and base_url.startswith("https://") else None
 
     def _auth_headers(self) -> dict:
         headers = dict(self.headers)
